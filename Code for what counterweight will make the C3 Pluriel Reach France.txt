@@ -1,0 +1,191 @@
+Code for what counterweight will make the C3 Pluriel Reach France?
+
+import math
+
+# -------------------------------------------------------------
+# 1) Problem parameters (SI units)
+# -------------------------------------------------------------
+# Environment and constants
+g   = 9.81                  # gravity [m/s^2]
+rho = 1.225                 # air density [kg/m^3]
+
+# Projectile (Citroën C3 Pluriel)
+m_proj = 1158.0             # mass [kg]
+CdA    = 0.762              # drag area [m^2]
+
+# Trebuchet geometry/assumptions
+h_drop = 12.0               # counterweight vertical drop [m]
+eta    = 0.70               # efficiency: PE -> projectile KE [-]
+
+# Launch conditions
+release_angle_deg = 45.0    # fixed release angle [deg]
+y0 = 27.5                   # launch height [m]
+
+# Target range (Dover -> Calais ~ 40 km)
+TARGET_RANGE = 40_000.0     # [m]
+
+# -------------------------------------------------------------
+# 2) Helpers: energy mapping to v0, and drag simulation
+# -------------------------------------------------------------
+ang = math.radians(release_angle_deg)
+coeff = 0.5 * rho * CdA / m_proj  # factor used in drag accelerations
+
+def v0_from_counterweight(m_counter: float) -> float:
+    """
+    Convert counterweight mass to launch speed:
+      v0 = sqrt( 2 * eta * m_cw * g * h_drop / m_proj )
+    """
+    KE = eta * m_counter * g * h_drop
+    return math.sqrt(2.0 * KE / m_proj)
+
+def simulate_range_given_v0(
+    v0: float,
+    max_dt: float = 0.05,
+    max_disp: float = 5.0,
+    y0_local: float = y0
+) -> float:
+    """
+    Integrate 2D motion with quadratic drag using a semi-implicit (Euler-Cromer) scheme.
+    Time step is adapted to limit displacement per step to ~max_disp for stability at high speeds.
+
+    Drag accelerations:
+      a_x = - (0.5*rho*CdA/m) * v * v_x
+      a_y = - (0.5*rho*CdA/m) * v * v_y - g
+
+    Stops at ground impact (y <= 0 while descending) and linearly interpolates to y=0 for range.
+    """
+    vx = v0 * math.cos(ang)
+    vy = v0 * math.sin(ang)
+    x, y = 0.0, y0_local
+
+    steps = 0
+    # Large cap to prevent infinite loops in pathological cases
+    MAX_STEPS = 600_000_000
+
+    while steps < MAX_STEPS:
+        steps += 1
+        v = math.hypot(vx, vy)
+        dt = min(max_dt, (max_disp / v) if v > 0.0 else max_dt)
+
+        ax = -coeff * v * vx
+        ay = -coeff * v * vy - g
+
+        # Semi-implicit (update velocity, then position)
+        vx += ax * dt
+        vy += ay * dt
+
+        x_prev, y_prev = x, y
+        x += vx * dt
+        y += vy * dt
+
+        if y <= 0.0 and vy < 0.0:
+            # Linear interpolation to the ground y=0
+            if y == y_prev:
+                return x
+            alpha = -y_prev / (y - y_prev)
+            return x_prev + alpha * (x - x_prev)
+
+    # If step cap is hit (should not happen for sane configurations)
+    return float('nan')
+
+def range_for_counterweight(m_counter: float) -> float:
+    v0 = v0_from_counterweight(m_counter)
+    return simulate_range_given_v0(v0, max_dt=0.05, max_disp=5.0, y0_local=y0)
+
+# -------------------------------------------------------------
+# 3) Solver: bracket by doubling, then bisection in log-space
+# -------------------------------------------------------------
+def find_required_counterweight(
+    target_range: float = TARGET_RANGE,
+    start_mass: float = 32_000.0,   # 32 tonnes starting point
+    max_mass: float = 1e25,         # absurd upper bound to avoid infinite doubling
+    tol_range: float = 1.0,         # meters
+    max_bisect_iter: int = 60
+):
+    # Bracket: start at start_mass, double until range >= target_range
+    m_low  = 0.0
+    r_low  = range_for_counterweight(m_low)  # should be 0
+    m_high = start_mass
+    r_high = range_for_counterweight(m_high)
+
+    doublings = 0
+    while (math.isnan(r_high) or r_high < target_range) and m_high < max_mass and doublings < 80:
+        m_high *= 2.0
+        r_high = range_for_counterweight(m_high)
+        doublings += 1
+
+    if math.isnan(r_high) or r_high < target_range:
+        return None  # Not reachable under these assumptions up to max_mass
+
+    # Bisection in log-space (geometric midpoint) for robustness over many decades
+    low_safe = 1e-30  # to avoid log10(0)
+    m_low = max(m_low, low_safe)
+
+    for _ in range(max_bisect_iter):
+        m_mid = 10 ** ((math.log10(m_low) + math.log10(m_high)) / 2.0)
+        r_mid = range_for_counterweight(m_mid)
+
+        if not math.isnan(r_mid) and abs(r_mid - target_range) < tol_range:
+            m_high = m_mid
+            break
+
+        if math.isnan(r_mid):
+            # If integration failed (shouldn't), tighten high bound
+            m_high = m_mid
+        elif r_mid >= target_range:
+            m_high = m_mid
+        else:
+            m_low = m_mid
+
+    # Final result
+    m_solution = m_high
+    v0_solution = v0_from_counterweight(m_solution)
+    final_range = range_for_counterweight(m_solution)
+
+    return {
+        "m_counter": m_solution,
+        "v0": v0_solution,
+        "range": final_range,
+        "bracket_high": m_high
+    }
+
+# -------------------------------------------------------------
+# 4) Run solver and print a clean summary
+# -------------------------------------------------------------
+result = find_required_counterweight(TARGET_RANGE)
+
+if result is None:
+    print(f"No solution: target range {TARGET_RANGE:.0f} m not reached within the mass cap.")
+else:
+    m_solution = result["m_counter"]
+    v0_solution = result["v0"]
+    final_range = result["range"]
+
+    c = 299_792_458.0  # speed of light [m/s], sanity check
+
+    # Summary (f-string, no escapes or trailing backslashes)
+    print(
+        f"""
+Required counterweight mass (approx):
+  m_cw ≈ {m_solution:.6e} kg
+
+Implied launch speed (classical, from energy mapping):
+  v0 ≈ {v0_solution:.3e} m/s  ({v0_solution/c:.3e} × c)
+
+Simulated range with drag at this mass:
+  R ≈ {final_range:.2f} m
+
+Assumptions:
+  θ = {release_angle_deg:.1f}°, y0 = {y0:.2f} m, h_drop = {h_drop:.2f} m, η = {eta:.2f},
+  m_proj = {m_proj:.1f} kg, CdA = {CdA:.3f} m^2, ρ = {rho:.3f} kg/m^3
+"""
+    )
+
+    # Friendly warning if the implied v0 is unphysical
+    if v0_solution > 0.1 * c:
+        print(
+            f"WARNING: v0 exceeds 0.1 c (relativistic). The classical energy mapping and "
+            f"constant CdA model are invalid in this regime. This highlights the practical "
+            f"impossibility of achieving {TARGET_RANGE/1000:.0f} km with a car-like projectile "
+            f"and a trebuchet under these assumptions."
+        )
