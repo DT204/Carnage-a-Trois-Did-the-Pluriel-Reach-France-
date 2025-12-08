@@ -1,0 +1,134 @@
+Code for range of 32 tonne counterweight
+
+import math
+
+# -------------------------------------------------------------
+# 1) Problem parameters (SI units)
+# -------------------------------------------------------------
+# Trebuchet parameters
+m_counter = 32_000.0        # counterweight mass [kg]
+h_drop = 12.0               # counterweight vertical drop [m]
+eta = 0.70                  # efficiency: fraction of PE -> projectile KE [-]
+
+# Projectile (Citroën C3 Pluriel)
+m_proj = 1158.0             # mass [kg]
+CdA = 0.762                 # drag area [m^2] (Cd * area)
+
+# Launch conditions
+release_angle_deg = 45.0    # assumed release angle [deg]
+y0 = 27.5                   # launch height above ground [m]
+
+# Environment
+rho = 1.225                 # air density [kg/m^3]
+g = 9.81                    # gravitational acceleration [m/s^2]
+
+# -------------------------------------------------------------
+# 2) Counterweight PE -> initial projectile speed
+#    PE_counter = m_cw * g * h_drop
+#    KE_proj    = eta * PE_counter
+#    v0         = sqrt(2 * KE_proj / m_proj)
+# -------------------------------------------------------------
+PE_counter = m_counter * g * h_drop
+KE_projectile = eta * PE_counter
+v0 = math.sqrt(2.0 * KE_projectile / m_proj)
+
+# Resolve initial velocity components
+theta = math.radians(release_angle_deg)
+vx0 = v0 * math.cos(theta)
+vy0 = v0 * math.sin(theta)
+
+# -------------------------------------------------------------
+# 3) Trajectory with quadratic drag (explicit Euler integration)
+#    Drag force: F_d = 0.5 * rho * CdA * |v|^2, opposite to v
+#    Component accelerations:
+#       a_drag_x = -(0.5*rho*CdA/m) * |v| * vx
+#       a_drag_y = -(0.5*rho*CdA/m) * |v| * vy
+#       a_y      = a_drag_y - g
+#    We step forward in time until the projectile crosses y = 0
+#    while descending, and we linearly interpolate to get the
+#    ground-range precisely.
+# -------------------------------------------------------------
+def simulate_range(dt: float) -> float:
+    """Simulate trajectory using explicit Euler with time step dt, return ground range [m]."""
+    x, y = 0.0, y0
+    vx, vy = vx0, vy0
+
+    x_prev, y_prev = x, y
+    coeff = 0.5 * rho * CdA / m_proj  # keep full expression visible in equations above
+
+    while True:
+        v = math.hypot(vx, vy)
+        if v == 0.0:
+            a_drag_x, a_drag_y = 0.0, 0.0
+        else:
+            # Accel due to drag in each component
+            a_drag_x = -coeff * v * vx
+            a_drag_y = -coeff * v * vy
+
+        ax = a_drag_x
+        ay = a_drag_y - g
+
+        # Save previous for ground-hit interpolation
+        x_prev, y_prev = x, y
+
+        # Explicit Euler update (kept for transparency)
+        vx += ax * dt
+        vy += ay * dt
+        x  += vx * dt
+        y  += vy * dt
+
+        # Ground impact check: y has crossed 0 while descending
+        if y <= 0.0 and vy < 0.0:
+            # Linear interpolation to y=0 between (x_prev, y_prev) and (x, y)
+            # x_ground = x_prev + (x - x_prev) * (0 - y_prev) / (y - y_prev)
+            if y == y_prev:
+                x_ground = x   # (degenerate; unlikely)
+            else:
+                x_ground = x_prev + (x - x_prev) * (-y_prev) / (y - y_prev)
+            return x_ground
+
+# -------------------------------------------------------------
+# 4) Convergence by time-step refinement
+#    Halve dt until the change in range is < tol (meters)
+# -------------------------------------------------------------
+def converged_range(initial_dt=0.02, max_refinements=10, tol=0.01):
+    dt = initial_dt
+    r_prev = simulate_range(dt)
+    for _ in range(max_refinements):
+        dt /= 2.0
+        r_new = simulate_range(dt)
+        if abs(r_new - r_prev) < tol:
+            return r_new, dt
+        r_prev = r_new
+    return r_prev, dt
+
+# -------------------------------------------------------------
+# 5) Vacuum (no-drag) reference solution
+#    y(t) = y0 + vy0 t - (1/2) g t^2
+#    Solve for t_ground > 0:
+#      t = (vy0 + sqrt(vy0^2 + 2 g y0)) / g
+#    Range_vac = vx0 * t
+# -------------------------------------------------------------
+TOF_vac = (vy0 + math.sqrt(vy0**2 + 2.0*g*y0)) / g
+range_vac = vx0 * TOF_vac
+
+# -------------------------------------------------------------
+# 6) Compute drag-limited range with convergence
+# -------------------------------------------------------------
+range_drag, dt_used = converged_range(initial_dt=0.02, max_refinements=10, tol=0.01)
+
+# -------------------------------------------------------------
+# 7) Report
+# -------------------------------------------------------------
+
+print(f"Initial speed v0 = {v0:.3f} m/s ({v0*3.6:.1f} km/h)")
+print(f"Vacuum time of flight = {TOF_vac:.3f} s")
+print(f"Vacuum range (no drag) = {range_vac:.3f} m")
+print(f"Drag-limited range (with CdA = 0.762 m-2, rho = 1.225 kgm-3) = {range_drag:.3f} m")
+print(f"Final time step used (converged) = {dt_used:.8f} s")
+
+
+
+
+
+https://trinket.io/python3/f79af42840
