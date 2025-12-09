@@ -1,0 +1,101 @@
+# Plot for actual trebuchet projectile trajectory in no drag and drag conditions:
+
+
+import math
+import matplotlib.pyplot as plt
+import numpy as np
+
+# -----------------------------
+# Parameters from first code
+# -----------------------------
+m_counter = 32_000.0        # counterweight mass [kg]
+h_drop = 12.0               # counterweight vertical drop [m]
+eta = 0.70                  # efficiency
+
+m_proj = 1158.0             # projectile mass [kg]
+CdA = 0.762                 # drag area [m^2]
+
+release_angle_deg = 45.0    # release angle [deg]
+y0 = 27.5                   # launch height [m]
+
+rho = 1.225                 # air density [kg/m^3]
+g = 9.81                    # gravity [m/s^2]
+
+# -----------------------------
+# Initial speed from energy mapping (Eq. 9)
+# -----------------------------
+PE_counter = m_counter * g * h_drop
+KE_projectile = eta * PE_counter
+v0 = math.sqrt(2.0 * KE_projectile / m_proj)
+
+theta = math.radians(release_angle_deg)
+vx0 = v0 * math.cos(theta)
+vy0 = v0 * math.sin(theta)
+
+# -----------------------------
+# Drag simulation (explicit Euler with small dt)
+# a_x = -(0.5*rho*CdA/m) * v * v_x
+# a_y = -(0.5*rho*CdA/m) * v * v_y - g
+# -----------------------------
+coeff = 0.5 * rho * CdA / m_proj
+
+def simulate_with_drag(dt=1.5e-4, max_time=60.0):
+    x, y = 0.0, y0
+    vx, vy = vx0, vy0
+    xs, ys = [x], [y]
+    t = 0.0
+    while t < max_time:
+        v = math.hypot(vx, vy)
+        ax = -coeff * v * vx
+        ay = -coeff * v * vy - g
+        vx += ax * dt
+        vy += ay * dt
+        x_prev, y_prev = x, y
+        x += vx * dt
+        y += vy * dt
+        t += dt
+        xs.append(x)
+        ys.append(y)
+        # stop at ground crossing (interpolate to y=0 for clean endpoint)
+        if y <= 0.0 and vy < 0.0:
+            if y != y_prev:
+                alpha = -y_prev / (y - y_prev)
+                x_ground = x_prev + alpha * (x - x_prev)
+                xs[-1] = x_ground
+                ys[-1] = 0.0
+            break
+    return xs, ys
+
+# -----------------------------
+# Vacuum (no drag) trajectory
+# y(t) = y0 + vy0 t - 0.5 g t^2
+# x(t) = vx0 t
+# -----------------------------
+TOF_vac = (vy0 + math.sqrt(vy0**2 + 2.0 * g * y0)) / g
+
+def vacuum_trajectory(num_points=500):
+    ts = np.linspace(0.0, TOF_vac, num_points)
+    xs = vx0 * ts
+    ys = y0 + vy0 * ts - 0.5 * g * ts**2
+    return xs.tolist(), ys.tolist()
+
+# Run simulations
+xs_drag, ys_drag = simulate_with_drag()
+xs_vac, ys_vac = vacuum_trajectory()
+
+# -----------------------------
+# Plot
+# -----------------------------
+plt.figure(figsize=(8, 4.8))
+plt.plot(xs_vac, ys_vac, label='Vacuum (no drag)', color='#1f77b4', linewidth=2)
+plt.plot(xs_drag, ys_drag, label='With drag (CdA=0.762 m^2)', color='#d62728', linewidth=2)
+
+plt.xlabel('Horizontal distance x [m]')
+plt.ylabel('Height y [m]')
+plt.title('Actual Trebuchet Projectile Trajectory (m_cw = 32 t, eta = 0.70, theta = 45 deg)')
+plt.legend(loc='best')
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+
+plt.savefig('trajectory_plot.png', dpi=160)
+plt.show()
