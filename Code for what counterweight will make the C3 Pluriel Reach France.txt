@@ -1,4 +1,5 @@
 Code for what counterweight will make the C3 Pluriel Reach France?
+# Run this code in a python compiler
 
 import math
 
@@ -189,3 +190,4 @@ Assumptions:
             f"impossibility of achieving {TARGET_RANGE/1000:.0f} km with a car-like projectile "
             f"and a trebuchet under these assumptions."
         )
+
