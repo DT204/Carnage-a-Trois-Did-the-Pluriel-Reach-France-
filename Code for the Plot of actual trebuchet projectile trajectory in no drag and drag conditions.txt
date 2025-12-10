@@ -1,5 +1,5 @@
 # Plot for actual trebuchet projectile trajectory in no drag and drag conditions:
-
+# Run code through compiler
 
 import math
 import matplotlib.pyplot as plt
@@ -99,3 +99,4 @@ plt.tight_layout()
 
 plt.savefig('trajectory_plot.png', dpi=160)
 plt.show()
+
